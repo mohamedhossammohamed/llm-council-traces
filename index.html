@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Quantum Council — LLM Debate Archive</title>
+<meta name="description" content="An interactive archive of 1,819 rounds of a self-interrogating LLM council debating quantum foundations. Explore the cosmos of arguments.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔭</text></svg>">
+</head>
+<body>
+<div id="cosmos-wrap"><canvas id="cosmos"></canvas><div id="vignette"></div></div>
+
+<header id="topbar" hidden>
+  <a class="brand" href="#/" aria-label="Home">✦ The Quantum Council</a>
+  <div class="searchbox">
+    <input id="search" type="search" placeholder="Search rounds, dates, ideas…" autocomplete="off" aria-label="Search rounds">
+    <ul id="search-results" role="listbox" hidden></ul>
+  </div>
+</header>
+
+<section id="hero">
+  <p class="hero-kicker">An archive of one mind arguing with itself</p>
+  <h1>The Quantum<br>Council</h1>
+  <p class="hero-sub" id="hero-stats">Loading the ledger…</p>
+  <div class="hero-cta">
+    <button id="enter-btn" class="btn primary" disabled>Enter the Archive</button>
+    <button id="about-btn" class="btn ghost">What is this?</button>
+  </div>
+</section>
+
+<aside id="about-panel" hidden>
+  <h2>What is this?</h2>
+  <p>Between August 22 and 23, 2026, a perpetual debate harness fired wave after wave
+  of councilor agents at the great questions of quantum foundations — measurement,
+  locality, realism, the Born rule — archiving every position paper verbatim.</p>
+  <p>There was only ever one councilor: <strong>ox-alpha</strong>, cross-examining its
+  own Everettian positions round after round, granting no retractions, conceding only
+  confessions it had already scheduled.</p>
+  <p>Each star below is one round. Size is its length; hue is the interpretation under
+  the knife that round. Click a star to read the full transcript. Nothing is summarized;
+  all <span id="about-count">1,819</span> rounds are here, complete.</p>
+  <button class="btn ghost" id="about-close">Close</button>
+</aside>
+
+<nav id="topic-rail" aria-label="Interpretation filter"></nav>
+
+<div id="tooltip" hidden></div>
+
+<footer id="timeline" hidden>
+  <button id="play-btn" class="btn icon" aria-label="Play tour" title="Tour the debate">▶</button>
+  <input id="scrubber" type="range" min="0" max="1818" value="0" step="1" aria-label="Round timeline">
+  <span id="scrub-label">—</span>
+</footer>
+
+<article id="reader" hidden aria-label="Round transcript">
+  <header id="reader-head">
+    <button class="btn icon" id="reader-close" aria-label="Close">✕</button>
+    <div id="reader-meta"></div>
+    <div class="reader-nav">
+      <button class="btn icon" id="prev-btn" aria-label="Previous round">←</button>
+      <button class="btn icon" id="next-btn" aria-label="Next round">→</button>
+    </div>
+  </header>
+  <div id="reader-body" class="prose"></div>
+</article>
+
+<div id="listview" hidden>
+  <h2>All rounds</h2>
+  <ol id="round-list"></ol>
+</div>
+
+<div id="boot-error" hidden>
+  <p>The cosmos needs WebGL or a modern browser. <button id="show-list" class="btn ghost">Browse as list instead</button></p>
+</div>
+
+<script type="module" src="assets/app.js"></script>
+</body>
+</html>
