@@ -49,6 +49,7 @@
 
 <footer id="timeline" hidden>
   <button id="play-btn" class="btn icon" aria-label="Play tour" title="Tour the debate">▶</button>
+  <button id="story-btn" class="btn icon" aria-label="Narrate the debate aloud" title="Spoken story mode">🎙</button>
   <input id="scrubber" type="range" min="0" max="1818" value="0" step="1" aria-label="Round timeline">
   <span id="scrub-label">—</span>
 </footer>
@@ -58,10 +59,12 @@
     <button class="btn icon" id="reader-close" aria-label="Close">✕</button>
     <div id="reader-meta"></div>
     <div class="reader-nav">
+      <button class="btn icon" id="listen-btn" aria-label="Listen to this round" title="Listen">▶</button>
       <button class="btn icon" id="prev-btn" aria-label="Previous round">←</button>
       <button class="btn icon" id="next-btn" aria-label="Next round">→</button>
     </div>
   </header>
+  <p id="reader-summary" hidden></p>
   <div id="reader-body" class="prose"></div>
 </article>
 

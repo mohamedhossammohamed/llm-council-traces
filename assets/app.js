@@ -397,6 +397,8 @@ async function openRound(seq, push) {
   }
   scrubber.value = seq;
   scrubLabel.textContent = "Round " + e.r;
+  const sumEl = document.getElementById("reader-summary");
+  if (e.s) { sumEl.textContent = e.s; sumEl.hidden = false; } else { sumEl.hidden = true; }
   if (push !== false) location.hash = "#/r/" + seq;
   window.dispatchEvent(new CustomEvent("round-open", { detail: seq }));
 }
@@ -442,6 +444,7 @@ async function appendNext(seq) {
 }
 
 function closeReader() {
+  if (window.narrStop) window.narrStop();
   readerEl.classList.remove("open");
   setTimeout(() => { readerEl.hidden = true; }, 450);
   currentSeq = -1;
@@ -591,3 +594,215 @@ main().catch((err) => {
   console.error(err);
   document.getElementById("boot-error").hidden = false;
 });
+
+/* ---------- narrator: persona voices + spoken story ---------- */
+const Narr = (() => {
+  const synth = window.speechSynthesis;
+  if (!synth) return { available: false };
+
+  let roster = [];
+  function loadVoices() {
+    const all = synth.getVoices();
+    if (!all.length) return false;
+    const pref = all.filter((v) => /^en(-|_)/i.test(v.lang));
+    const pool = (pref.length ? pref : all).filter((v) => !v.localService || true);
+    roster = [];
+    for (const v of pool) {
+      if (!roster.some((x) => x.name === v.name)) roster.push(v);
+      if (roster.length >= 6) break;
+    }
+    return roster.length > 0;
+  }
+  loadVoices();
+  synth.onvoiceschanged = loadVoices;
+
+  let queue = [];
+  let qi = 0;
+  let mode = "idle";          // idle | round | story
+  let keepalive = 0;
+  const cue = document.createElement("div");
+  cue.className = "narr-cue";
+  cue.innerHTML = "<span class=eq><i></i><i></i><i></i></span><span id=narr-label></span>";
+  cue.hidden = true;
+  document.body.appendChild(cue);
+  const label = () => document.getElementById("narr-label");
+
+  function speakPart(part, onDone) {
+    const u = new SpeechSynthesisUtterance(part.text);
+    const v = roster[part.voice % roster.length];
+    if (v) { u.voice = v; u.lang = v.lang; }
+    u.rate = part.rate || 0.98;
+    u.pitch = part.pitch || 1.0;
+    u.onend = () => onDone();
+    u.onerror = (ev) => { if (ev.error !== "interrupted" && ev.error !== "canceled") onDone(); else onDone(); };
+    synth.speak(u);
+  }
+
+  function pump() {
+    if (mode === "idle") return;
+    if (qi >= queue.length) {
+      const fin = onFinish;
+      stopAll();
+      if (fin) fin();
+      return;
+    }
+    speakPart(queue[qi], () => {
+      qi += 1;
+      pump();
+    });
+  }
+
+  let onFinish = null;
+
+  function start(parts, m, fin) {
+    cancel();
+    queue = parts.filter((p) => p.text && p.text.trim());
+    qi = 0;
+    mode = m;
+    onFinish = fin || null;
+    cue.hidden = false;
+    clearInterval(keepalive);
+    keepalive = setInterval(() => { if (synth.speaking) synth.resume(); }, 9000);
+    pump();
+  }
+
+  function cancel() {
+    synth.cancel();
+    queue = []; qi = 0; mode = "idle";
+    clearInterval(keepalive);
+    cue.hidden = true;
+    document.getElementById("listen-btn").classList.remove("on");
+    document.getElementById("story-btn").classList.remove("on");
+  }
+  function stopAll() { cancel(); }
+
+  function togglePause() {
+    if (synth.paused) synth.resume(); else if (synth.speaking) synth.pause();
+  }
+
+  /* markdown-ish text to clean speech text */
+  function spoken(text) {
+    let t = text.split("$").join(" ");
+    t = t.split("**").join("").split("*").join("");
+    t = t.split("`").join("");
+    t = t.split("#").join(" ");
+    t = t.split("_").join(" ");
+    while (t.indexOf("  ") >= 0) t = t.split("  ").join(" ");
+    return t.trim();
+  }
+
+  function chunk(text, n) {
+    const words = spoken(text).split(" ");
+    const out = [];
+    let cur = [];
+    for (const w of words) {
+      cur.push(w);
+      const L = cur.join(" ").length;
+      const endsSentence = /[.!?]$/.test(w);
+      if ((endsSentence && L > n * 0.55) || L > n) {
+        out.push(cur.join(" "));
+        cur = [];
+      }
+    }
+    if (cur.length) out.push(cur.join(" "));
+    return out;
+  }
+
+  function bodyParts(body, voiceBase) {
+    const MARK = "--- agent ";
+    const segs = [];
+    let from = 0;
+    for (;;) {
+      const i = body.indexOf(MARK, from);
+      if (i < 0) { segs.push(body.slice(from)); break; }
+      const nl = body.indexOf(String.fromCharCode(10), i);
+      if (nl < 0) { segs.push(body.slice(0, i)); break; }
+      segs.push(body.slice(from, i));
+      from = nl + 1;
+    }
+    const parts = [];
+    segs.forEach((seg, si) => {
+      const vs = voiceBase + si;
+      for (const piece of chunk(seg, 210)) {
+        parts.push({
+          text: piece,
+          voice: vs,
+          rate: 0.97,
+          pitch: 0.9 + ((si * 37) % 5) * 0.05,
+        });
+      }
+    });
+    return parts;
+  }
+
+  async function narrateRound(seq) {
+    const e = state.bySeq[seq];
+    try {
+      const rec = await fetchRound(seq);
+      const intro = "Round " + e.r + ". " +
+        new Date(e.ts + "Z").toUTCString().slice(5, 22) + ", universal time. " +
+        (e.a ? e.a[0] + " of " + e.a[1] + " councilor papers landed. " : "") +
+        (e.s ? spoken(e.s) : "");
+      const parts = [{ text: intro, voice: 0, rate: 0.96, pitch: 0.9 }]
+        .concat(bodyParts(rec.body, 1));
+      start(parts, "round", null);
+    } catch (err) {
+      label().textContent = "could not fetch this round";
+      setTimeout(() => { cue.hidden = true; }, 2500);
+    }
+  }
+
+  async function narrateStory(fromSeq) {
+    let seq = fromSeq;
+    const step = () => {
+      if (mode !== "story") return;
+      seq += 1;
+      if (seq >= state.bySeq.length) { cancel(); return; }
+      run();
+    };
+    const run = async () => {
+      const e = state.bySeq[seq];
+      scrubber.value = seq;
+      scrubLabel.textContent = "Round " + e.r;
+      cosmos && cosmos.focus(seq, false);
+      if (readerEl.hidden || currentSeq !== seq) openRound(seq);
+      label().textContent = "Story · Round " + e.r;
+      let rec;
+      try { rec = await fetchRound(seq); }
+      catch (err) { setTimeout(step, 1500); return; }
+      const intro = "Round " + e.r + ". " + (e.s ? spoken(e.s) : "");
+      start([{ text: intro, voice: 0, rate: 0.94, pitch: 0.88 }]
+        .concat(bodyParts(rec.body, 1)), "story", step);
+    };
+    mode = "story";
+    run();
+  }
+
+  return {
+    available: true,
+    narrateRound,
+    narrateStory,
+    cancel,
+    togglePause,
+    get active() { return mode !== "idle"; },
+    get mode() { return mode; },
+    setLabel(t) { label().textContent = t; },
+  };
+})();
+window.narrStop = () => Narr.available && Narr.cancel();
+
+document.getElementById("listen-btn").addEventListener("click", function () {
+  if (!Narr.available) { this.title = "No speech synthesis in this browser"; return; }
+  if (Narr.active && Narr.mode === "round") { Narr.cancel(); return; }
+  this.classList.add("on");
+  Narr.setLabel("Reading round " + state.bySeq[currentSeq].r);
+  Narr.narrateRound(currentSeq);
+});
+document.getElementById("story-btn").addEventListener("click", function () {
+  if (!Narr.available) { this.title = "No speech synthesis in this browser"; return; }
+  if (Narr.active && Narr.mode === "story") { Narr.cancel(); return; }
+  this.classList.add("on");
+  const from = readerEl.hidden ? +scrubber.value : currentSeq;
+  Narr.narrateStory(Math.max(0, from));
+});
+addEventListener("beforeunload", () => { if (Narr.available) speechSynthesis.cancel(); });
