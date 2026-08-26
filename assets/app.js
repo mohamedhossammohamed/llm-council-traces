@@ -973,3 +973,34 @@ const Cast = (() => {
 
   return { currentVoice };
 })();
+
+/* ---------- copy whole round ---------- */
+document.getElementById("copy-btn").addEventListener("click", function () {
+  const text = window.__qcRoundText || "";
+  if (!text) return;
+  const done = () => {
+    const prevTitle = this.title;
+    this.classList.add("copied");
+    this.title = "Copied";
+    setTimeout(() => { this.classList.remove("copied"); this.title = prevTitle; }, 1400);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done.bind(this)).catch(() => fallbackCopy(text, this));
+  } else {
+    fallbackCopy(text, this);
+  }
+});
+function fallbackCopy(text, btn) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  document.body.removeChild(ta);
+  if (btn) {
+    btn.classList.add("copied");
+    setTimeout(() => btn.classList.remove("copied"), 1400);
+  }
+}

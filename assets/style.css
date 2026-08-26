@@ -242,3 +242,5 @@ button { font: inherit; cursor: pointer; }
 #cast-list .btn.icon { border-radius: 50%; }
 #cast-list li.cast-on .cv-name { color: var(--gold); }
 #cast-list li.cast-on .cv-name::after { content: " · cast"; font-size: 11px; }
+
+#copy-btn.copied { color: var(--gold); border-color: var(--gold); }
