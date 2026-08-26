@@ -595,214 +595,291 @@ main().catch((err) => {
   document.getElementById("boot-error").hidden = false;
 });
 
-/* ---------- narrator: persona voices + spoken story ---------- */
+
+/* ---------- narrator v2: one universal neural voice, prose only ---------- */
 const Narr = (() => {
-  const synth = window.speechSynthesis;
+  const VOICE = "af_heart";
+  const MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
+  const synth = window.speechSynthesis || null;
   if (!synth) return { available: false };
 
-  let roster = [];
-  function loadVoices() {
-    const all = synth.getVoices();
-    if (!all.length) return false;
-    const pref = all.filter((v) => /^en(-|_)/i.test(v.lang));
-    const pool = (pref.length ? pref : all).filter((v) => !v.localService || true);
-    roster = [];
-    for (const v of pool) {
-      if (!roster.some((x) => x.name === v.name)) roster.push(v);
-      if (roster.length >= 6) break;
-    }
-    return roster.length > 0;
-  }
-  loadVoices();
-  synth.onvoiceschanged = loadVoices;
+  let tts = null;
+  let loadingPromise = null;
 
-  let queue = [];
-  let qi = 0;
-  let mode = "idle";          // idle | round | story
-  let keepalive = 0;
+  function engine() {
+    if (tts) return Promise.resolve(tts);
+    if (!loadingPromise) {
+      label("summoning the voice · 86 MB once");
+      loadingPromise = import("https://esm.sh/kokoro-js@1.2.1")
+        .then((mod) => mod.KokoroTTS.from_pretrained(MODEL, {
+          dtype: "q8f16", device: "wasm",
+          progress_callback: (p) => {
+            if (p && p.status === "progress" && p.total) {
+              const pct = Math.round((p.loaded / p.total) * 100);
+              if (pct % 10 === 0) label("summoning the voice · " + pct + "%");
+            }
+          },
+        }))
+        .then((t) => { tts = t; return t; })
+        .catch((e) => { loadingPromise = null; throw e; });
+    }
+    return loadingPromise;
+  }
+
+  /* ---- prose cleaning: read the text and nothing but the text ---- */
+  function stripProse(body) {
+    const keep = [];
+    for (let raw of body.split(String.fromCharCode(10))) {
+      const t = raw.trim();
+      if (!t) continue;
+      if (t.charAt(0) === "#") continue;                       // headers
+      if (t.indexOf("--- agent ") === 0) continue;             // machine dividers
+      if (/^(-{3,}|={3,}|\*{3,})$/.test(t)) continue;          // rules
+      if (t.charAt(0) === "|" || t.charAt(0) === "+") continue;// tables
+      if (t.length > 30 && t.charAt(0) === "*" && t.endsWith("*")) continue; // stage directions
+      if (/^\[(edit|citation|note)/i.test(t)) continue;
+      keep.push(t.replace(/^>\s?/, ""));
+    }
+    let text = keep.join(String.fromCharCode(10));
+    while (true) {                                             // drop $math$ spans
+      const i = text.indexOf("$");
+      if (i < 0) break;
+      let j = text.indexOf("$", i + 1);
+      if (j < 0) { text = text.slice(0, i); break; }
+      text = text.slice(0, i) + " " + text.slice(j + 1);
+    }
+    for (const ch of ["**", "*", "`", "_", "#", "\(", "\)", "\["]) {
+      text = text.split(ch).join("");
+    }
+    while (text.indexOf("  ") >= 0) text = text.split("  ").join(" ");
+    return text.trim();
+  }
+
+  function chunk(text, n) {
+    const out = [];
+    let cur = "";
+    for (const w of text.split(" ")) {
+      cur += (cur ? " " : "") + w;
+      const L = cur.length;
+      const end = /[.!?][")]?$/.test(w);
+      if ((end && L > n * 0.55) || L > n) { out.push(cur); cur = ""; }
+    }
+    if (cur) out.push(cur);
+    return out.filter((s) => s.trim().length > 1);
+  }
+
+  /* ---- playback state ---- */
+  let mode = "idle";
+  let parts = [];
+  let pi = 0;
+  let onFinish = null;
+  const audio = new Audio();
+  audio.preload = "auto";
+  const bufs = new Map();
+  let storyRound = -1;
+  let genToken = 0;
+
   const cue = document.createElement("div");
   cue.className = "narr-cue";
   cue.innerHTML = "<span class=eq><i></i><i></i><i></i></span><span id=narr-label></span>";
   cue.hidden = true;
   document.body.appendChild(cue);
-  const label = () => document.getElementById("narr-label");
-
-  function speakPart(part, onDone) {
-    const u = new SpeechSynthesisUtterance(part.text);
-    const v = roster[part.voice % roster.length];
-    if (v) { u.voice = v; u.lang = v.lang; }
-    u.rate = part.rate || 0.98;
-    u.pitch = part.pitch || 1.0;
-    u.onend = () => onDone();
-    u.onerror = (ev) => { if (ev.error !== "interrupted" && ev.error !== "canceled") onDone(); else onDone(); };
-    synth.speak(u);
+  function label(t) {
+    const el = document.getElementById("narr-label");
+    if (el && t !== undefined) el.textContent = t;
+    return el;
   }
 
-  function pump() {
-    if (mode === "idle") return;
-    if (qi >= queue.length) {
-      const fin = onFinish;
-      stopAll();
-      if (fin) fin();
-      return;
+  function wavUrl(raw) {
+    const sr = raw.sampling_rate || 24000;
+    const n = raw.audio.length;
+    const buf = new ArrayBuffer(44 + n * 2);
+    const v = new DataView(buf);
+    const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    ws(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); ws(8, "WAVE");
+    ws(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true); v.setUint32(24, sr, true);
+    v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    ws(36, "data"); v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) {
+      let s = Math.max(-1, Math.min(1, raw.audio[i]));
+      v.setInt16(44 + i * 2, s < 0 ? s * 32768 : s * 32767, true);
     }
-    speakPart(queue[qi], () => {
-      qi += 1;
-      pump();
-    });
+    return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
   }
 
-  let onFinish = null;
-
-  function start(parts, m, fin) {
-    cancel();
-    queue = parts.filter((p) => p.text && p.text.trim());
-    qi = 0;
-    mode = m;
-    onFinish = fin || null;
-    cue.hidden = false;
-    clearInterval(keepalive);
-    keepalive = setInterval(() => { if (synth.speaking) synth.resume(); }, 9000);
-    pump();
-  }
-
-  function cancel() {
-    synth.cancel();
-    queue = []; qi = 0; mode = "idle";
-    clearInterval(keepalive);
+  function reset() {
+    genToken += 1;
+    audio.pause();
+    parts = []; pi = 0; bufs.clear(); onFinish = null; mode = "idle";
     cue.hidden = true;
     document.getElementById("listen-btn").classList.remove("on");
     document.getElementById("story-btn").classList.remove("on");
   }
-  function stopAll() { cancel(); }
 
-  function togglePause() {
-    if (synth.paused) synth.resume(); else if (synth.speaking) synth.pause();
+  async function synthPart(i, token) {
+    if (bufs.has(i)) return bufs.get(i);
+    const t = await tts.create(parts[i], { voice: VOICE });
+    if (token !== genToken) throw new Error("cancelled");
+    const url = wavUrl(t);
+    bufs.set(i, url);
+    return url;
   }
 
-  /* markdown-ish text to clean speech text */
-  function spoken(text) {
-    let t = text.split("$").join(" ");
-    t = t.split("**").join("").split("*").join("");
-    t = t.split("`").join("");
-    t = t.split("#").join(" ");
-    t = t.split("_").join(" ");
-    while (t.indexOf("  ") >= 0) t = t.split("  ").join(" ");
-    return t.trim();
-  }
-
-  function chunk(text, n) {
-    const words = spoken(text).split(" ");
-    const out = [];
-    let cur = [];
-    for (const w of words) {
-      cur.push(w);
-      const L = cur.join(" ").length;
-      const endsSentence = /[.!?]$/.test(w);
-      if ((endsSentence && L > n * 0.55) || L > n) {
-        out.push(cur.join(" "));
-        cur = [];
+  async function pump(token) {
+    while (mode !== "idle" && pi < parts.length) {
+      let url;
+      try {
+        url = await synthPart(pi, token);
+      } catch (e) {
+        if (mode === "idle") return;
+        pi += 1;
+        continue;
       }
-    }
-    if (cur.length) out.push(cur.join(" "));
-    return out;
-  }
-
-  function bodyParts(body, voiceBase) {
-    const MARK = "--- agent ";
-    const segs = [];
-    let from = 0;
-    for (;;) {
-      const i = body.indexOf(MARK, from);
-      if (i < 0) { segs.push(body.slice(from)); break; }
-      const nl = body.indexOf(String.fromCharCode(10), i);
-      if (nl < 0) { segs.push(body.slice(0, i)); break; }
-      segs.push(body.slice(from, i));
-      from = nl + 1;
-    }
-    const parts = [];
-    segs.forEach((seg, si) => {
-      const vs = voiceBase + si;
-      for (const piece of chunk(seg, 210)) {
-        parts.push({
-          text: piece,
-          voice: vs,
-          rate: 0.97,
-          pitch: 0.9 + ((si * 37) % 5) * 0.05,
+      if (mode === "story" && storyRound > 0) {
+        label("Story · Round " + storyRound);
+      } else if (mode === "round" && currentSeq >= 0) {
+        label("Reading round " + state.bySeq[currentSeq].r);
+      }
+      await new Promise((res) => {
+        audio.src = url;
+        audio.onended = res;
+        audio.play().catch(() => {
+          const resume = () => { audio.play().catch(res); };
+          document.addEventListener("click", resume, { once: true });
+          label("tap anywhere to continue");
+          setTimeout(res, 12000);
         });
-      }
-    });
-    return parts;
+      });
+      if (mode === "idle" || token !== genToken) return;
+      pi += 1;
+      const nextIdx = pi;
+      if (nextIdx < parts.length) synthPart(nextIdx, token).catch(() => {});
+    }
+    if (mode !== "idle") {
+      const fin = onFinish;
+      reset();
+      if (fin) fin();
+    }
   }
 
+  /* ---- public API ---- */
   async function narrateRound(seq) {
-    const e = state.bySeq[seq];
+    const token = ++genToken;
+    mode = "round";
+    cue.hidden = false;
+    document.getElementById("listen-btn").classList.add("on");
     try {
-      const rec = await fetchRound(seq);
-      const intro = "Round " + e.r + ". " +
-        new Date(e.ts + "Z").toUTCString().slice(5, 22) + ", universal time. " +
-        (e.a ? e.a[0] + " of " + e.a[1] + " councilor papers landed. " : "") +
-        (e.s ? spoken(e.s) : "");
-      const parts = [{ text: intro, voice: 0, rate: 0.96, pitch: 0.9 }]
-        .concat(bodyParts(rec.body, 1));
-      start(parts, "round", null);
-    } catch (err) {
-      label().textContent = "could not fetch this round";
-      setTimeout(() => { cue.hidden = true; }, 2500);
+      await engine();
+    } catch (e) {
+      fallbackSpeak(seq, token);
+      return;
     }
+    const e = state.bySeq[seq];
+    let rec;
+    try { rec = await fetchRound(seq); }
+    catch (err) { label("could not fetch this round"); setTimeout(() => { if (mode !== "idle") reset(); }, 2500); return; }
+    if (token !== genToken) return;
+    const intro = "Round " + e.r + ". " +
+      new Date(e.ts + "Z").toUTCString().slice(5, 22) + ", universal time. " +
+      (e.a ? e.a[0] + " of " + e.a[1] + " councilor papers. " : "") +
+      (e.s ? stripProse(e.s) : "");
+    parts = chunk(intro, 700).concat(chunk(stripProse(rec.body), 700));
+    pi = 0; bufs.clear();
+    pump(token);
   }
 
   async function narrateStory(fromSeq) {
-    let seq = fromSeq;
+    const token = ++genToken;
+    mode = "story";
+    cue.hidden = false;
+    document.getElementById("story-btn").classList.add("on");
+    try { await engine(); }
+    catch (e) { fallbackSpeak(Math.max(0, fromSeq), token, true); return; }
+    let seq = Math.max(0, fromSeq);
     const step = () => {
-      if (mode !== "story") return;
       seq += 1;
-      if (seq >= state.bySeq.length) { cancel(); return; }
-      run();
+      if (seq >= state.bySeq.length) { reset(); return; }
+      runRound();
     };
-    const run = async () => {
+    const runRound = async () => {
+      if (mode !== "story" || token !== genToken) return;
       const e = state.bySeq[seq];
       scrubber.value = seq;
       scrubLabel.textContent = "Round " + e.r;
       cosmos && cosmos.focus(seq, false);
       if (readerEl.hidden || currentSeq !== seq) openRound(seq);
-      label().textContent = "Story · Round " + e.r;
+      label("Story · Round " + e.r);
       let rec;
       try { rec = await fetchRound(seq); }
-      catch (err) { setTimeout(step, 1500); return; }
-      const intro = "Round " + e.r + ". " + (e.s ? spoken(e.s) : "");
-      start([{ text: intro, voice: 0, rate: 0.94, pitch: 0.88 }]
-        .concat(bodyParts(rec.body, 1)), "story", step);
+      catch (err) { setTimeout(step, 2000); return; }
+      if (token !== genToken || mode !== "story") return;
+      const intro = "Round " + e.r + ". " + (e.s ? stripProse(e.s) : "");
+      parts = chunk(intro, 700).concat(chunk(stripProse(rec.body), 700));
+      pi = 0; bufs.clear();
+      storyRound = e.r;
+      onFinish = step;
+      pump(token);
     };
-    mode = "story";
-    run();
+    runRound();
+  }
+
+  /* system-voice fallback: same clean prose, lesser voice */
+  function fallbackSpeak(seq, token, story) {
+    const pool = synth.getVoices().filter((v) => /^en/i.test(v.lang));
+    const v = pool.find((x) => /samantha|daniel|google uk english female|aria/i.test(x.name)) ||
+              pool[0] || synth.getVoices()[0];
+    const runOne = (text, cont) => {
+      if (mode === "idle" || token !== genToken) return;
+      for (const piece of chunk(text, 220)) {
+        const u = new SpeechSynthesisUtterance(piece);
+        if (v) u.voice = v;
+        u.rate = 1.0;
+        synth.speak(u);
+      }
+      const wait = setInterval(() => {
+        if (!synth.speaking) { clearInterval(wait); cont(); }
+      }, 400);
+    };
+    mode = story ? "story" : "round";
+    cue.hidden = false;
+    const stepSeq = () => {
+      const e = state.bySeq[seq];
+      label((story ? "Story·fallback · R" : "Fallback voice · R") + e.r);
+      fetchRound(seq).then((rec) => {
+        if (mode === "idle" || token !== genToken) return;
+        runOne("Round " + e.r + ". " + (e.s ? stripProse(e.s) : "") + " " +
+               stripProse(rec.body), () => {
+          seq += 1;
+          if (story && seq < state.bySeq.length && mode !== "idle") stepSeq();
+          else reset();
+        });
+      }).catch(() => reset());
+    };
+    stepSeq();
   }
 
   return {
     available: true,
     narrateRound,
     narrateStory,
-    cancel,
-    togglePause,
+    cancel: reset,
+    togglePause() { if (audio.paused && audio.src) audio.play(); else audio.pause(); },
     get active() { return mode !== "idle"; },
     get mode() { return mode; },
-    setLabel(t) { label().textContent = t; },
+    setLabel(t) { label(t); },
   };
 })();
 window.narrStop = () => Narr.available && Narr.cancel();
 
 document.getElementById("listen-btn").addEventListener("click", function () {
-  if (!Narr.available) { this.title = "No speech synthesis in this browser"; return; }
   if (Narr.active && Narr.mode === "round") { Narr.cancel(); return; }
-  this.classList.add("on");
-  Narr.setLabel("Reading round " + state.bySeq[currentSeq].r);
+  if (currentSeq < 0) return;
   Narr.narrateRound(currentSeq);
 });
 document.getElementById("story-btn").addEventListener("click", function () {
-  if (!Narr.available) { this.title = "No speech synthesis in this browser"; return; }
   if (Narr.active && Narr.mode === "story") { Narr.cancel(); return; }
-  this.classList.add("on");
   const from = readerEl.hidden ? +scrubber.value : currentSeq;
-  Narr.narrateStory(Math.max(0, from));
+  Narr.narrateStory(from);
 });
-addEventListener("beforeunload", () => { if (Narr.available) speechSynthesis.cancel(); });
+addEventListener("beforeunload", () => { Narr.cancel(); });
