@@ -13,6 +13,7 @@
 
 <header id="topbar" hidden>
   <a class="brand" href="#/" aria-label="Home">✦ The Quantum Council</a>
+  <button id="cast-btn" class="btn icon" aria-label="Voice casting" title="Voice casting">🎚</button>
   <div class="searchbox">
     <input id="search" type="search" placeholder="Search rounds, dates, ideas…" autocomplete="off" aria-label="Search rounds">
     <ul id="search-results" role="listbox" hidden></ul>
@@ -67,6 +68,14 @@
   <p id="reader-summary" hidden></p>
   <div id="reader-body" class="prose"></div>
 </article>
+
+<aside id="cast-panel" hidden>
+  <h2>Voice casting</h2>
+  <p class="cast-note">One neural voice speaks the whole council. Audition the candidates on a
+  passage from the archive, then cast your choice — it is remembered on this device.</p>
+  <ol id="cast-list"></ol>
+  <button class="btn ghost" id="cast-close">Close</button>
+</aside>
 
 <div id="listview" hidden>
   <h2>All rounds</h2>

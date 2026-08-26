@@ -222,3 +222,23 @@ button { font: inherit; cursor: pointer; }
 .narr-cue .eq i:nth-child(2) { animation-delay: .18s; }
 .narr-cue .eq i:nth-child(3) { animation-delay: .36s; }
 @keyframes eqb { 50% { height: 11px; } }
+
+#cast-btn { margin-left: auto; }
+#cast-panel {
+  position: fixed; z-index: 62; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  width: min(480px, calc(100vw - 36px)); max-height: 82vh; overflow: auto;
+  background: var(--glass); backdrop-filter: blur(18px); border: 1px solid var(--line);
+  border-radius: 20px; padding: 26px 28px;
+}
+#cast-panel h2 { font-family: var(--serif); color: var(--gold); font-weight: 500; margin-bottom: 8px; }
+.cast-note { color: var(--dim); font-size: 13px; line-height: 1.55; margin-bottom: 14px; }
+#cast-list { list-style: none; }
+#cast-list li {
+  display: flex; align-items: center; gap: 12px; padding: 9px 6px;
+  border-bottom: 1px solid var(--line);
+}
+#cast-list .cv-name { flex: 1; font-size: 14px; color: var(--ink); }
+#cast-list .cv-tag { font-size: 11px; color: var(--dim); display: block; }
+#cast-list .btn.icon { border-radius: 50%; }
+#cast-list li.cast-on .cv-name { color: var(--gold); }
+#cast-list li.cast-on .cv-name::after { content: " · cast"; font-size: 11px; }

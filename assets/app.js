@@ -598,7 +598,11 @@ main().catch((err) => {
 
 /* ---------- narrator v2: one universal neural voice, prose only ---------- */
 const Narr = (() => {
-  const VOICE = "af_heart";
+  const CAST_KEY = "qc-voice";
+  function currentVoice() {
+    try { return localStorage.getItem(CAST_KEY) || "af_heart"; }
+    catch (e) { return "af_heart"; }
+  }
   const MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
   const synth = window.speechSynthesis || null;
   if (!synth) return { available: false };
@@ -719,7 +723,7 @@ const Narr = (() => {
 
   async function synthPart(i, token) {
     if (bufs.has(i)) return bufs.get(i);
-    const t = await tts.create(parts[i], { voice: VOICE });
+    const t = await tts.create(parts[i], { voice: currentVoice() });
     if (token !== genToken) throw new Error("cancelled");
     const url = wavUrl(t);
     bufs.set(i, url);
@@ -863,6 +867,12 @@ const Narr = (() => {
     available: true,
     narrateRound,
     narrateStory,
+    async synthSample(text, voice) {
+      await engine();
+      return wavUrl(await tts.create(text, { voice }));
+    },
+    showCue(msg) { cue.hidden = false; label(msg || "…"); },
+    hideCueIfIdle() { if (mode === "idle") cue.hidden = true; },
     cancel: reset,
     togglePause() { if (audio.paused && audio.src) audio.play(); else audio.pause(); },
     get active() { return mode !== "idle"; },
@@ -883,3 +893,83 @@ document.getElementById("story-btn").addEventListener("click", function () {
   Narr.narrateStory(from);
 });
 addEventListener("beforeunload", () => { Narr.cancel(); });
+
+/* ---------- voice casting: audition before you commit ---------- */
+const Cast = (() => {
+  const CANDIDATES = [
+    ["af_heart", "female · warm lead"],
+    ["af_bella", "female · bright"],
+    ["af_nova", "female · smooth"],
+    ["af_sky", "female · light"],
+    ["af_nicole", "female · soft whisper"],
+    ["am_michael", "male · calm newsroom"],
+    ["am_adam", "male · grounded"],
+    ["am_fenrir", "male · commanding"],
+    ["bf_emma", "british · measured"],
+    ["bm_george", "british · gravitas"],
+  ];
+  const SAMPLE = "Let me state my allegiance before the knives come out, because ambiguity " +
+    "is the disease this council exists to cure. Where, precisely, in the equations, does " +
+    "the collapse operator live? Not in the interpretation section of your textbook. Show me the term.";
+  const panel = document.getElementById("cast-panel");
+  const list = document.getElementById("cast-list");
+  const audio = new Audio();
+  let busyVoice = null;
+
+  function stored() {
+    try { return localStorage.getItem("qc-voice") || "af_heart"; }
+    catch (e) { return "af_heart"; }
+  }
+
+  function build() {
+    list.innerHTML = "";
+    for (const [id, tag] of CANDIDATES) {
+      const li = document.createElement("li");
+      li.dataset.v = id;
+      if (id === stored()) li.classList.add("cast-on");
+      li.innerHTML = "<span class=cv-name>" + id +
+        "<span class=cv-tag>" + tag + "</span></span>" +
+        "<button class=\"btn icon\" data-play=" + id + " aria-label=\"audition " + id + "\">▶</button>" +
+        "<button class=\"btn icon\" data-cast=" + id + " aria-label=\"cast " + id + "\" title=\"Cast this voice\">✓</button>";
+      list.appendChild(li);
+    }
+  }
+
+  async function audition(id) {
+    Narr.cancel();
+    busyVoice = id;
+    try {
+      Narr.showCue("casting " + id + " · first time loads the model");
+      const url = await Narr.synthSample(SAMPLE, id);
+      if (busyVoice !== id) { Narr.hideCueIfIdle(); return; }
+      audio.src = url;
+      audio.play().catch(() => {});
+    } catch (e) {
+      Narr.setLabel("voice engine unavailable");
+    } finally {
+      setTimeout(() => { if (!Narr.active) Narr.hideCueIfIdle(); }, 1200);
+    }
+  }
+
+  function cast(id) {
+    try { localStorage.setItem("qc-voice", id); } catch (e) {}
+    [...list.children].forEach((li) =>
+      li.classList.toggle("cast-on", li.dataset.v === id));
+  }
+
+  list.addEventListener("click", (e) => {
+    const play = e.target.closest("[data-play]");
+    if (play) { audition(play.dataset.play); return; }
+    const pick = e.target.closest("[data-cast]");
+    if (pick) { cast(pick.dataset.cast); }
+  });
+  document.getElementById("cast-btn").addEventListener("click", () => {
+    build();
+    panel.hidden = false;
+  });
+  document.getElementById("cast-close").addEventListener("click", () => {
+    panel.hidden = true;
+  });
+
+  return { currentVoice };
+})();
